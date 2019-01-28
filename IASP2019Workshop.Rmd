@@ -1,0 +1,458 @@
+---
+title: "Network analysis of suicidal behavior in R, bring your own laptop workshop. IASP 2019"
+author: "Derek de Beurs, PhD"
+date: "18-6-2017"
+output:
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This tutorial provides the data and the material for the workshop at the 3oth  International symposium for suicide prevention (IASP) in Derry/Londonderry [https://www.iasp2019.com/](https://www.iasp2019.com/).
+
+In this tutorial, I will apply networkanalysis to the Beck Scale for suicide ideation, as done in our [BJP article](https://www.researchgate.net/publication/316665929_Association_between_suicidal_symptoms_and_repeat_suicidal_behaviour_within_a_sample_of_hospital-treated_suicide_attempters). 
+
+It contains updated analysis of our paper in BJP open. The updates are based on the [recent blog of Sacha Epskamp](http://psychosystems.org/author/sachaepskamp/). The data is available for download  [here](https://github.com/derekdebeurs/esssb17).
+
+The most relevant packages are qgraph, bootnet and mgm. Some code is based on pre-print material, such as a recent paper on 3-way interactions within the [MGM package](https://arxiv.org/pdf/1807.02877.pdf)
+
+As these packages and papers will likely be updated in the future, it might be that the code does not work anymore after a specific amount of time.
+
+Be sure to check out the site of [Eiko Fried](http://psych-networks.com), where most new innovations in the field of networkanalysis are presented in a comprehensible way!
+
+To be clear, the goal of this tutorial is to help researchers in the field of suicide prevention get started with networkanalysis by applying some of the recent network techniques to data with information on suicidality. I did not develop any of the techniques, nor do I claim to fully understand all nitty gritty details. I am mainly enthousiastic about the potential of networkanalysis in the field of suicide prevention.
+
+If you are serious about applying networkanalysis to your data, I would advice to contact the group of [prof Borsboom](http://psychosystems.org/people).
+
+## Install packages
+
+For the workshop itself, it is convenient if you have installed the latest versions of the packages below before the workshop begins via install.packages("nameofthepackage").
+
+First, you need to install the packages
+
+```{r message = FALSE, warning = FALSE}
+list.of.packages <- c("mgm", "bootnet", "qgraph", "dplyr", "haven", "summarytools", "ggplot2" )
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+```
+
+
+
+```{r message = FALSE, warning = FALSE}
+
+library(mgm) ## package for Mixed Graphical modeling
+library("bootnet") ## main package for estimating of network
+library("qgraph") ## package for vizalisation of network
+library("dplyr") ## package for data manipulation
+library("haven") ## package to load SPSS data
+library("summarytools") ## package for summarizing data
+library("ggplot2") ## package foo
+```
+
+## What is a network?
+
+When we discuss networks within the realm of psychopathology, we are discussing the visualization and interpretation of an x by x association matrix. I deliberately use the word association, and not correlation, because in order to come to a sparse and interpretable network, we need to use penalization techniques on a correlation matrix (Epskamp & Fried 2016).Let's first consider a simple, an empty 2 by 2 matrix:
+
+``` {r message = FALSE}
+one <- matrix ( c(0,0,
+               0,0), nrow=2, 
+               ncol=2)
+
+colnames(one) <- c("Node","Node")
+
+qgraph(one, vsize = 15)
+```
+
+This code results in two nodes, that are not connected. We can connect the nodes by changing the matrix:
+
+``` {r message = FALSE}
+two <- matrix ( c(0,1,
+                  1,0), nrow=2, 
+                ncol=2)
+colnames(two) <- c("Node","Node")
+
+qgraph(two, vsize = 15)
+```
+
+The package qgraph allows to visualize the strength of the connection. If we change the connection between node 1 and node 2 by 3 (instead of the neutral 1), we find that the edge that connects the nodes becomes both green and thicker.
+
+
+``` {r message = FALSE}
+three <- matrix ( c(0,3,
+                  3,0), nrow=2, 
+                ncol=2)
+
+colnames(three) <- c("Node","Node")
+
+qgraph(three, layout = "circle", vsize = 15)
+```
+
+We can also visualize a negative relationship:
+
+``` {r  message = FALSE}
+four <- matrix ( c(0,-3,
+                  -3,0), nrow=2, 
+                ncol=2)
+
+colnames(four) <- c("Node","Node")
+
+
+qgraph(four, layout = "circle", vsize = 15)
+
+```
+
+Nodes and edges can represent anything, for example, the relationship between depression (D) and rumination (R) or the number of published articles of the first author (D) and the third author (R) of this article. We can change the naming of the nodes of the previous matrix three using the following line:
+
+``` {r message = FALSE}
+five <- matrix ( c(0,3,
+                  3,0), nrow=2, 
+                ncol=2)
+
+colnames(five) <- c("D","R")
+
+qgraph(five, layout = "circle", vsize = 15)
+```
+
+A graph can be expanded by adding another row and column to the matrix. In this matrix, node 1 (named D) has a relationship of 4 with node 2 (named R) and of three with the third node, which we will call C. C and R are not directly related, but connected via D.
+
+``` {r message = FALSE}
+six <- matrix ( c(0,4,3,
+                   4,0,0, 
+                   3,0,0), nrow=3, 
+                 ncol=3)
+
+colnames(six) <- c("D","R", "C")
+
+qgraph(six, layout = "circle", vsize = 15)
+```
+
+
+Node D is the most important node, as D is the only node that is linked to both R and C.  R has a stronger link to D in comparison to C, so it is the second most central node. C automatically becomes the weakest link in the network. In qgraph, the so-called Furchterman Reingold alghoritm allows us to visualize this relative dependency(Fruchterman & Reingold 1991). It places the most central nodes in the middle of the graph, and least central nodes to the periphery. You can view the graph using the algorithm by changing the layout into "spring".
+
+## Centrality
+
+Importantly, the centrality or importance of a node in a network can be quantified. In qgraph, three kinds of different, but highly related measures of centrality are implemented: betweenness, closeness and strength.  More information about the separate definitions can be found in (Fried et al. 2016)
+
+``` {r message = FALSE}
+centralityPlot(six)
+```
+
+## Application on actual data
+
+Now that we demonstrated the basics of matrix visualizing and centrality estimation, we can start estimating networks on actual data. We will use data from a sample of 367 patients treated for a suicide attempt in a Scottish hospital(O'Connor et al. 2015). Within 24 hours, the patients answered the Beck Scale for Suicide Ideation (BSS: Beck et al., 1979). For a more detailed description of the data, the design and the outcomes see (de Beurs et al. 2017; O'Connor et al. 2015).
+
+The data is available for download  [here](https://github.com/derekdebeurs/esssb17).
+
+
+## Cleaning up your work space
+
+```{r message = FALSE}
+rm(list = ls())
+```
+
+## Set working directory
+
+It is important to set the working directory. This will be the location where you can store data and the code. You can use the code below by changing the path with your own path. You can also you the dropdown menu: session: set working directory.
+
+```{r message = FALSE}
+
+ setwd("C:/Users/user123/Dropbox/SUPER/Tutorial") 
+```
+
+## Read the file
+
+The downloaded text file that contains the data can be loaded into Rstudio as follows:
+
+```{r message = FALSE}
+data <- read.table("C:/Users/user123/Dropbox/SUPER/Tutorial/Tutorial.txt" )
+```
+
+## Rename the variables
+
+ You will find that you often want to rename the variable names, as these will later on be used in the visualisation of the graph. In the code below, you change the names of the columns 3 to 22.
+
+```{r message = FALSE}
+
+names(data) <-c("liv", "die", "rea", "des", "pas", "dur", 
+                         "fre", "att", "con", "det",
+                          "cry", "pla", "met", "cou", "exp", 
+                         "pre", "not", "arr", "cea", "rep")
+
+
+```
+
+## Describing the data
+
+It is advised to always inspect the distribution of your data.
+
+```{r  message=FALSE, warning=FALSE}
+descr(data)
+```
+
+
+## Subset for this tutorial
+
+For the further demonstration of new techniques, I selected only the first 5 items of the BSS and called the subset "Sub". Note that we did not use this subset in the article. I selected these 5 for sake of parsimony.
+
+```{r  message=FALSE, warning=FALSE}
+Sub <- data[1:5]
+```
+
+## Making group names
+
+To facilitate graphical interpretation, it is possible to colour the variables which you expect to cluster. In this study we wanted to see whether the more cognitive or motivational items of the BSS (such as frequency of suicide ideation) and the more action prone or volitional items (such as actual preparing of an attempt) cluster. Importantly, this grouping does not influences the placing of the nodes! It only gives the nodes that you group the same colour. You can also let a clustering algoritm search for clusters, for example via the package EGA. That is beyond this tutorial, more info can be found via a [blog of Eiko Fried](http://psych-networks.com/r-tutorial-identify-communities-items-networks/#comment-2241).
+
+
+```{r  message=FALSE, warning=FALSE}
+groups <- structure(list(Motivational = c(1,2,3,4,5,6,7,8, 11), 
+                         Volititional = c(9,10,12,13,14,15,16,17,18,19), 
+                         FutureAttempt = c(20)), 
+                    Names = c("motivational", 
+                              "volitional", "Repeat suicidal behaviour"))
+```
+
+## Estimating the network
+
+Different kind of variables ask for different kind of estimation method. When data are continous and normally distributed, we use the gaussian graphical model. This can also be used for ordinal variables, when cormethod is set to "cor_auto".
+
+A so-called L1-regularization parameter is used to get a sparse network:
+
+```{r message = FALSE}
+
+Network <-estimateNetwork(data,default = "EBICglasso" ,  threshold = FALSE, corMethod = "cor_auto")
+
+```
+
+## Plotting the network
+
+The package qgraph is used to plot the network. One can use either layout = 'spring' or layout is 'circle'. Spring places the nodes using the Furchterman Reingold alghoritm.
+
+```{r message = FALSE}
+plot(Network, groups = groups, layout = 'spring')
+```
+
+## Centrality
+
+A key concept in network analysis is the centrality of the symptom: if a symptom (e.g. fatigue) has many and/or strong
+associations to other symptoms, they are more central within the network than a less connected symptom.There are different centrality metrics, but strenght is most often used. Expected influence is related to strength but argued to be a [better metric](http://psych-networks.com/expected-influence-new-centrality-metric-robinaugh-et-al-2016/).
+
+```{r  message=FALSE, warning=FALSE}
+centralityPlot(Network, include = c("Strength","ExpectedInfluence"),
+               orderBy = "ExpectedInfluence")
+```
+
+## Updates in qgraph and bootnet
+
+A new function in qgraph lets you display the network from one node. For some reason, I have to explicitly estimate the network using qgraph. Will have to ask Sasha or Eiko about that.
+
+```{r  message=FALSE, warning=FALSE}
+g2 <- qgraph(cor_auto(data), graph = "glasso", sampleSize = nrow(data), 
+      layout = "spring", theme = "colorblind", 
+     cut = 0, groups = groups)
+
+flow(g2, "rep",  theme = "colorblind", vsize = 4)
+```
+
+## New network estimation methods
+
+In the latest version of bootnet, new estimation methods are available. Bellow I compared three: standard EBISglasso, a more conservative EBICglasso with a threshold, and unreguralized estimation.
+
+Explanation of GLASSO can be found [here](http://psychosystems.org/glasso_developments).
+
+
+```{r  message=FALSE, warning=FALSE}
+
+layout(t(1:3))
+
+g1 <- qgraph(cor_auto(Sub), graph = "glasso", sampleSize = nrow(Sub),
+             theme = "colorblind", title = "EBICglasso", 
+             cut = 0)
+
+g2 <- qgraph(cor_auto(Sub), graph = "glasso", sampleSize = nrow(Sub),
+              theme = "colorblind", title = "EBICglasso_threshold", threshold = TRUE,
+             cut = 0)
+
+g3 <- estimateNetwork(Sub, 
+              default = "ggmModSelect",
+              stepwise = TRUE,
+              corMethod = "cor")
+
+plot(g3, title = "ggModSelect", layout = "circle")
+
+
+```
+
+## Mixed graphical models
+
+When one has a mix of continous and binary one can use the [package mgm](https://cran.r-project.org/web/packages/mgm/mgm.pdf). The cool thing is that the explained variance per node can be added. Here, we re-did our initial analysis with MGM. 
+
+```{r  message=FALSE, warning=FALSE}
+
+Sub_mgm <- na.omit(Sub)
+Sub_mgm <- as.data.frame(Sub_mgm)
+
+
+mgm <- mgm(data = Sub_mgm,
+                  type = c( rep("c", 5)), ## "c"" indicates that the variable is categorical
+                  levels = c(
+                      rep(3, 5)), ## three indicates the number of levels of the variables
+                  k = 2, 
+                  lambdaSel = "CV",
+                  ruleReg = "AND")
+                 
+
+
+pred_Model1 <- predict(object = mgm, 
+                       data = Sub_mgm,
+                       errorCon = c("RMSE", "R2"),
+                       errorCat = c("CC", "nCC"))
+                       
+                       
+x <- as.matrix(pred_Model1$errors)
+error_Model1 <- c(x[1:5,5]) ## ,5 indicates the estimated error to be selected from matrix x
+error_Model1 <- as.numeric(error_Model1)
+error_Model1  <- abs(error_Model1)
+
+error_Model1 ### error matrix
+
+layout(t(1:1))
+
+g4 <- qgraph(mgm$pairwise$wadj, 
+             layout = 'circle',
+        edge.color = mgm$pairwise$edgecolor, 
+             pie = error_Model1,
+             pieColor = rep('#377EB8'),
+             labels = colnames(Sub_mgm),
+             cut = 0)
+
+
+plot(g4)
+
+```
+
+
+##  Comparing networks
+
+Centrality analyses, especially of the more stable strength metric, are hardly impacted by the estimation method.
+
+```{r message = FALSE}
+centralityPlot(list(EBIC = g1, thres =g2, ggm = g3, mgm = g4))
+```
+
+## Three-way interaction
+
+Untill very recently, it was only possible to estimate *pairwise* interactions. Jonas Haslbeck has a pre-print out of an update of mgm that allows to estimate three way-interactions. As this has not been empircally validated, and the bootnet interferes with the new function of mgm, I only give the code for demonstration during the workshop.
+
+```{r  message=FALSE, warning=FALSE}
+
+#mgm_mod <- mgm(data =Sub_mgm,
+#type = rep("c", 5),
+#level = rep(3, 5),
+#lambdaSel = "EBIC",
+#lambdaGam = .5,
+#ruleReg = "AND",
+#moderators = 1:5,
+#scale = TRUE)
+
+#showInteraction(object = mgm_mod, int = c(1,2))
+
+#mgm_mod$interactions$indicator
+#mgm_mod$rawfactor
+
+##FactorGraph(object = mgm_mod,
+#edge.labels =TRUE, PairwiseAsEdge = TRUE,
+#labels = colnames(Sub_mgm))
+
+```
+
+As one can see, there were three different three way interactions. However, the parameters were quite small.
+
+I asked Jonas: Does this not challenge the validity of all previous network analysis, as it is higly unlikely that each pairwise interaction is not influenced by the other variables?
+
+He answered: Yeah I guess it is quite unlikely that all pairwise interactions are independent of the values of all other variables. But the question is of course how large those moderation effects are. Generally in psychology (maybe all disciplines?) main effects seem always to be (much) larger than interaction/moderation effects. This is also what I see in the few data sets I looked at when searching examples for the tutorial. But of course this is entirely an empirical question that should be mapped out in the future.
+
+## Bootstrapping for stability
+
+It is vital to estimate the stability of the edge weight parameters. Code and exdplanation I used below is based on [this blog of Eiko Fried](http://psych-networks.com/r-tutorial-power-issues-robustness-network-models/).
+
+The package bootnet allows to estimate the edge-weight accuracy of our earlier estimated network:
+
+
+```{r  message=FALSE, warning=FALSE}
+
+boot1a <- bootnet(Sub, default ="EBICglasso", nBoots = 1000, nCores = 8)
+plot(boot1a, labels = TRUE, order = "sample") 
+```
+
+The Y-axis gives all pair wise edges in the network. The red docs give the edge weights of the network, and the grey area the 95% CI around the weights. As in all CI, the smaller the grey area, the more stable your estimation. As a rule of thumb, one can state the if the grey area of interactions do not overlap, the edge weights between the nodes are likely to differ. For example, one could state that the edge weight between liv-die is significantly larger when compared with the edge weight of die-pas.
+
+Another way of vizialising with edges differ significantly from other edges is via the edge-weight-difference-test: 
+ 
+```{r, include = FALSE}
+plot(boot1a, "edge", plot = "difference",onlyNonZero = TRUE,
+     order = "sample") 
+
+```
+The edge liv-die seems to differ from six other edges, whereas the edge rea-pas only difference from two edges.
+
+On new feature allows to plot the quantile intervals only for the times the regularization was not set to zero. For a nice explanation, see [this blog](http://psych-networks.com/bootstrapping-edges-after-regularization-clarifications-tutorial/#easy-footnote-bottom-3). 
+
+```{r  message=FALSE, warning=FALSE}
+plot(boot1a, plot = "interval", split0 = TRUE, order="sample", labels=TRUE)
+```
+
+## Stability
+
+Stability can be estimated via a different concept. The idea is that when a centrality measure is similar even after 50% of the patients are deleted from the sample
+
+```{r  message=FALSE, warning=FALSE}
+boot1b <- bootnet(Sub, default ="EBICglasso", nBoots = 1000, type = "case",  nCores = 8)
+plot(boot1b)
+
+```
+
+As found in many more studies, strenght seems most stable. A stability coeficient can be calculated witch should be between
+025 and .75.
+
+```{r  message=FALSE, warning=FALSE}
+corStability(boot1b)
+```
+
+Only strenght seems to be stable enough.
+
+The metric Expected influence can also be tested for stability:
+
+```{r  message=FALSE, warning=FALSE}
+Network2 <-estimateNetwork(Sub,default = "EBICglasso" ,  threshold = FALSE, corMethod = "cor_auto")
+boots <- bootnet(Network2, statistics = "ExpectedInfluence", 
+                 nBoots = 1000, nCores = 8, type = "case")
+
+plot(boots, statistics = "ExpectedInfluence") + 
+  theme(legend.position = "none")
+```
+
+## Relative importance
+
+Finally, because I really love this technique, I give a short demonstration of a new feature in bootnet: Relative importance.
+
+Per node, one can estimate the relative importance of all other nodes. 
+
+```{r  message=FALSE, warning=FALSE}
+net_relimp <- estimateNetwork(Sub,
+              default = "relimp",
+              normalize = FALSE)
+plot(net_relimp, layout = "spring")
+```
+
+```{r message=FALSE, warning=FALSE}
+boot_relimp<- bootnet(net_relimp, nBoots = 100, nCores = 8)
+plot(boot_relimp, order = "sample")
+```
+
+
+
